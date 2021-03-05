@@ -4,6 +4,7 @@ sys.path.append(r'C:\Users\jsalm\Documents\UF\PhD\Spring 2021\BME6938-Neuromecha
 import numpy as np
 import scipy as sp
 import pylab as plt
+import os
 from scipy.fftpack import fft,fftfreq
 from scipy.integrate import odeint, RK45
 from scipy.signal import find_peaks
@@ -154,7 +155,41 @@ class Pendulum():
         self.prev_cond = [Xp[-1,0],Xp[-1,1]]
         self.storeX.append([Xp[-1,0],Xp[-1,1]])
         return Xp
+
+class SpringMass():
+    g = 9.81
+    def __init__(self,t,initial_cond,coeff):
+        self.kc = int(coeff[0]) # spring stiffness
+        self.mc = int(coeff[1]) # body mass
+        self.wc = int(coeff[2]) # natural frequency
+        self.ac = int(coeff[3]) # boundary coefficient
+        self.bc = -self.g/(coeff[2])**2 # boundary coefficinet
+    
+    @staticmethod
+    def dALLdt(X,t,self):
+        y = self.ac*np.sin(self.wc)+self.bc*np.cos(self.wc)+self.g/(self.wc)**2
+        dydtdt = self.g-self.kc/self.mc*y
+        return dydtdt, y
         
+    def plot_store(self):
+        X = np.array(self.storeX)
+        theta_1 = X[:,0]
+        theta_2 = X[:,1]
+        fig = plt.figure('pendulum',figsize=(20,10))
+        
+        plt.plot(self.t,theta_1,'b--',label=r'$\frac{d\theta_1}{dt}=\theta2$')
+        plt.plot(self.t,theta_2,'r--',label=r'$\frac{d\theta_2}{dt}=-\frac{b}{m}\theta_2-\frac{g}{L}sin\theta_1$')
+        plt.xlabel('time(s)')
+        plt.ylabel('plot')
+        plt.legend(loc='best')
+        fig.savefig(r'C:\Users\jsalm\Documents\UF\PhD\Spring 2021\BME6938-Neuromechanics\save_bin\pendulum_graph.png',dpi=200,bbox_inches='tight')
+        return X
+    
+    def solve(self,t):
+        Xp = odeint(self.dALLdt, self.prev_cond, t, tcrit = t, args=(self,))
+        self.prev_cond = [Xp[-1,0],Xp[-1,1]]
+        self.storeX.append([Xp[-1,0],Xp[-1,1]])
+        return Xp
     
 
 class DomainFinder():
@@ -263,8 +298,7 @@ class Muscle_Mech(DomainFinder):
         ub = 0
         bb = 0
         count = 0
-        avgfrq1 = []
-        avgfrq2 = []
+        avgfrq = []
         for i in range(0,len(self.t_ms)-1):
             #Initia time and Pendulum diffeq
             t_ms = [self.t_ms[i],self.t_ms[i+1]]
