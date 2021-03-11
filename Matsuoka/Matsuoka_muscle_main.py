@@ -7,7 +7,10 @@ Created on Wed Mar  3 20:41:13 2021
 
 import Matsuoka_muscle as mm
 import numpy as np
+import os
 import matplotlib.pyplot as plt
+
+
 
 if __name__=='__main__':
     plt.close('all')

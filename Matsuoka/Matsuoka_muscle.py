@@ -9,10 +9,11 @@ from scipy.fftpack import fft,fftfreq
 from scipy.integrate import odeint, RK45
 from scipy.signal import find_peaks
 
-
+dirname = os.path.dirname(__file__)
+save_bin = os.path.join(dirname,"save_bin")
         
 class Matsuoka():    
-    def __init__(self,initial_cond,coeff):
+    def __init__(self,initial_cond,coeff,ioc):
         """Full Matsuoka Neural Oscillator"""
         self.bc = coeff[0] #float(2.5) #coefficient adjusts time course of the adaptation (b=0, 0<b<inf, and b=inf)
         self.wc = coeff[1] #float(2.5) #strength of the inhibitory connection bewteen the neurons
@@ -25,7 +26,7 @@ class Matsuoka():
         self.condition = True
         self.prev_cond = initial_cond
         self.storeX = [initial_cond]
-        self.storeoc = [0]
+        self.storeoc = [ioc]
     
         #bc, wc, h1, h2, t1, t2, c1
     def check_condition(self):
@@ -54,7 +55,7 @@ class Matsuoka():
         
         return dx1dt, dx2dt, dv1dt, dv2dt
         
-    def solve(self,t,oc):        
+    def solve(self,t,oc):
         X = odeint(self.dALLdt, self.prev_cond, t, tcrit = t, args = (self,oc))
 
         self.prev_cond = X[-1,:]
@@ -63,9 +64,12 @@ class Matsuoka():
         # self.storeX = X
         return X
         
-    def plot_store(self,t_ms,n_name):
+    def plot_store(self,t_ms,n_name,act_fname):
         """
         Main demo for the Hodgkin Huxley neuron model
+        act_fname : TYPE string
+            DESCRIPTION name of the the activaiton function you are using for the
+            matsuoka oscillator (e.g. "Pendulum angle")
         """
         X = np.stack(self.storeX)
         oc = np.stack(self.storeoc)
@@ -95,11 +99,11 @@ class Matsuoka():
         plt.subplot(3,1,3)
         plt.plot(t_ms, oc, 'r--', label = 'activation function')
         plt.xlabel('time (ms)')
-        plt.ylabel('Pendulum Angle')
+        plt.ylabel('{}'.format(act_fname))
         plt.legend()
         plt.grid(linestyle='--',linewidth='1')
         plt.tight_layout()
-        fig.savefig(r'C:\Users\jsalm\Documents\UF\PhD\Spring 2021\BME6938-Neuromechanics\save_bin\{}.png'.format(n_name),dpi=200,bbox_inches='tight')
+        fig.savefig(os.path.join(save_bin,'{}.png'.format(n_name)),dpi=200,bbox_inches='tight')
         
         return X
     
@@ -147,7 +151,7 @@ class Pendulum():
         plt.xlabel('time(s)')
         plt.ylabel('plot')
         plt.legend(loc='best')
-        fig.savefig(r'C:\Users\jsalm\Documents\UF\PhD\Spring 2021\BME6938-Neuromechanics\save_bin\pendulum_graph.png',dpi=200,bbox_inches='tight')
+        fig.savefig(os.path.join(save_bin,'pendulum_graph.png'),dpi=200,bbox_inches='tight')
         return X
     
     def solve(self,t):
@@ -157,38 +161,73 @@ class Pendulum():
         return Xp
 
 class SpringMass():
+    #use cham et al 2007
     g = 9.81
     def __init__(self,t,initial_cond,coeff):
-        self.kc = int(coeff[0]) # spring stiffness
-        self.mc = int(coeff[1]) # body mass
-        self.wc = int(coeff[2]) # natural frequency
-        self.ac = int(coeff[3]) # boundary coefficient
-        self.bc = -self.g/(coeff[2])**2 # boundary coefficinet
+        self.kc = float(coeff[0]) # spring stiffness
+        self.mc = float(coeff[1]) # body mass
+        self.wc = (1/(2*np.pi))*(coeff[0]/coeff[1])**(1/2) # natural frequency
+        self.ac = float(coeff[2]) # boundary coefficient
+        self.bc = -self.g/(coeff[1])**2 # boundary coefficient
+        self.dc = float(coeff[3])
+        self.cf = 2*float(coeff[3])*((coeff[0]*coeff[1])**(1/2))
+        self.springgain = self.g*coeff[1]*coeff[4] #matsuoka oscillator multiplier
+        self.prev_cond = initial_cond
+        self.storeX = [initial_cond]
+        self.t = t
+        
+        
+    def soft(self,func,t):
+        i = np.where(self.t >= t)[0][0]        
+        func = func[int(i)-1]
+        return func
     
     @staticmethod
-    def dALLdt(X,t,self):
-        y = self.ac*np.sin(self.wc)+self.bc*np.cos(self.wc)+self.g/(self.wc)**2
-        dydtdt = self.g-self.kc/self.mc*y
-        return dydtdt, y
+    def dALLdt(X,t,self,func):        
+        y1, y2 = X #y1 is the velocity, and y2 is the height
+        """
+        if y1 <= 0:            
+            foft = func
+            A = np.array([[0,1],[-self.wc**2,-2*self.dc*self.wc]])
+            B = np.array([[0],[foft-1]])
+        elif y1 > 0:
+            A = np.array([[0,1],[0,0]])
+            B = np.array([[0],[-1]])
+        y = np.array([[y1],[y2]])
+        dydt = np.matmul(A,y) + B
+        return dydt[0,0], dydt[1,0]
+        """
+        if y1 <= 0:
+            foft = func
+            dydt = y2
+            dydtdt = foft/self.mc - (self.kc/self.mc)*y1-(self.cf/self.mc)*y2 - self.g
+        else:
+            dydt = y2
+            dydtdt = -self.g
+        
+        return dydt, dydtdt
         
     def plot_store(self):
-        X = np.array(self.storeX)
+        X = np.stack(self.storeX)
         theta_1 = X[:,0]
         theta_2 = X[:,1]
-        fig = plt.figure('pendulum',figsize=(20,10))
-        
-        plt.plot(self.t,theta_1,'b--',label=r'$\frac{d\theta_1}{dt}=\theta2$')
-        plt.plot(self.t,theta_2,'r--',label=r'$\frac{d\theta_2}{dt}=-\frac{b}{m}\theta_2-\frac{g}{L}sin\theta_1$')
-        plt.xlabel('time(s)')
-        plt.ylabel('plot')
-        plt.legend(loc='best')
-        fig.savefig(r'C:\Users\jsalm\Documents\UF\PhD\Spring 2021\BME6938-Neuromechanics\save_bin\pendulum_graph.png',dpi=200,bbox_inches='tight')
+        fig,ax = plt.subplots()
+        plt.title('Spring Mass')
+        fig.set_size_inches(18.5,10.5)
+        ax.plot(self.t,theta_1,color="red",label='height (m)')
+        ax.set_xlabel('time (s)')
+        ax.set_ylabel('Height (m)',color="red")
+        ax2=ax.twinx()
+        ax2.plot(self.t,theta_2,label='Length')
+        ax2.set_ylabel("Velocity (m/s)",color="blue")
+        plt.show()
+        fig.savefig(os.path.join(save_bin,'springmass_graph.png'),dpi=200,bbox_inches='tight')
         return X
     
-    def solve(self,t):
-        Xp = odeint(self.dALLdt, self.prev_cond, t, tcrit = t, args=(self,))
-        self.prev_cond = [Xp[-1,0],Xp[-1,1]]
-        self.storeX.append([Xp[-1,0],Xp[-1,1]])
+    def solve(self,func,t):
+        Xp = odeint(self.dALLdt, self.prev_cond, t, tcrit = t, args=(self,func))
+        self.prev_cond = Xp[-1,:]
+        self.storeX.append(Xp[-1,:])
         return Xp
     
 
@@ -205,7 +244,7 @@ class DomainFinder():
         return (xmin,xmax),(ymax,ymin)
         
 class Muscle_Mech(DomainFinder):
-    Ttot = 20
+    Ttot = 3
     # total time in second
     f_s = 1000 # sample frequency (samples/s)
     t_s = np.arange(0,Ttot,1/f_s)
@@ -220,7 +259,7 @@ class Muscle_Mech(DomainFinder):
         y1=max(x1,0)
         y2=max(x2,0)
         y=y1-y2
-        return y
+        return y1,y2,y
     
     def force_length(self,a,c,dist,theta,Fres,pendR):
         Lmax = dist**2+pendR**2
@@ -247,20 +286,9 @@ class Muscle_Mech(DomainFinder):
         #print(invsigmoid)
         return invsigmoid
        
-    def muscle_torque(self,y,Xp,R):
-        pendang = Xp[1]
-        pendv = Xp[0]
-        ### Muscle Params ###
-        vmax = .4
-        musclegain = self.musclegain
-        a = 1
-        c = 1
-        dist = .1
-        Fres = 0.0001
-        ###
-        FL_2, FL_1 = self.force_length(a,c,dist,pendang,Fres,R)
-        FV = self.force_velocity(pendv,vmax)
-        torque = y*musclegain #(musclegain/1_000_000*abs(FL_2)*FV*y)-(musclegain/1_000_000*abs(FL_1)*FV*y)
+    def muscle_torque(self,y):
+        #for previous implmentation of this in HH model see HodgkinHuxley folder
+        torque = y*self.musclegain
         self.storeT.append(torque)
         return torque
     
@@ -309,7 +337,7 @@ class Muscle_Mech(DomainFinder):
             if i > time_delay:
                 mats_X = matsuoka.solve(t_ms,Xp[-1,1])
                 y = self.stim(mats_X[-1,0],mats_X[-1,1])
-                pendulum.force = self.muscle_torque(y,Xp[-1,:],pendulum.R)               
+                pendulum.force = self.muscle_torque(y)     
             else:
                 matsuoka.storeX.append(n_i)
                 matsuoka.storeoc.append(0)
@@ -324,14 +352,58 @@ class Muscle_Mech(DomainFinder):
             #     if abs(avgfrq1[-2]-avgfrq2[-1]) < 0.1 and count == 0:
             #         print("reached steady state")
             
+    def hoping_model(self,matsuoka,springmass,affgain,n_i,coeff):
+        delay_ms = 1 #delay in ms
+        time_delay = int(self.f_s/1000*delay_ms) #delay in samples based on sample rate
+        print('starting diffeq solver...')
+        ub = 0
+        bb = 0
+        count = 0
+        avgfrq = []
+        springforce = 0
+        for i in range(0,len(self.t_ms)-1):
+            #Initia time and Pendulum diffeq
+            t_ms = [self.t_ms[i],self.t_ms[i+1]]
+            t_s = [self.t_s[i],self.t_s[i+1]]       
+            Xp = springmass.solve(springforce,t_s)
+            ub += 1
+            #delay iteration of force from muscle and activation of neurons
+            if i > time_delay:
+                mats_X = matsuoka.solve(t_ms,Xp[-1,0])
+                y1,_,_ = self.stim(mats_X[-1,0],mats_X[-1,1])
+                springforce = self.muscle_torque(y1)
+            else:
+                matsuoka.storeX.append(n_i)
+                matsuoka.storeoc.append(Xp[-1,0])
+                springforce = 0
+                self.storeT.append(0)
+            # judging steady states using average frequency of top 5 peaks
+            # if ub > 500:
+            #     bb += 1 
+            #     avgfrq.append([self._avg_freq_profile(np.stack(matsuoka.storeX)[bb:ub,0],5),
+            #                    self._avg_freq_profile(np.stack(matsuoka.storeX)[bb:ub,1],5)])
 
-        # Xp = pendulum.plot_store()
-        # matsuoka.plot_store(self.t_ms,'coeff_{}'.format(coeff))
-        # self.plot_torque()
-        # self.plot_pend_torq(Xp)
-        # plt.waitforbuttonpress()
+        Xp = springmass.plot_store()
+        matsuoka.plot_store(self.t_ms,'coeff_{}'.format(coeff),"Mass Height (m)")
+        self.plot_torque_spring(springmass)
+        plt.waitforbuttonpress()
         return 0
     
+    def plot_torque_spring(self,spring):
+        torque = np.stack(self.storeT)
+        length = np.stack(spring.storeX)[:,0]
+        fig,ax = plt.subplots()
+        plt.title('plot_torque_length')
+        fig.set_size_inches(18.5,10.5)
+        ax.plot(self.t_ms,torque,color="red",alpha = 0.5,label='torque')
+        ax.set_xlabel('time (s)')
+        ax.set_ylabel('Force (N)',color="red")
+        ax2=ax.twinx()
+        ax2.plot(self.t_ms,length,alpha = 0.7, label='Length')
+        ax2.set_ylabel("Hopping Height (m)",color="blue")
+        plt.show()
+        fig.savefig(os.path.join(save_bin,'force_length_graph.png'),dpi=200,bbox_inches='tight')
+        
     def plot_torque(self):
         torque = np.stack(self.storeT)
         length = np.stack(self.storeL)[:,0]
@@ -345,7 +417,7 @@ class Muscle_Mech(DomainFinder):
         ax2.plot(self.t_ms,length,label='Length')
         ax2.set_ylabel("Muscle Length (m)",color="blue")
         plt.show()
-        fig.savefig(r'C:\Users\jsalm\Documents\UF\PhD\Spring 2021\BME6938-Neuromechanics\save_bin\force_length_graph.png',dpi=200,bbox_inches='tight')
+        fig.savefig(os.path.join(save_bin,'force_length_graph.png'),dpi=200,bbox_inches='tight')
     
     def plot_pend_torq(self,Xp):
         torque = self.storeT
@@ -359,73 +431,23 @@ class Muscle_Mech(DomainFinder):
         ax2.plot(self.t_ms,Xp[:,1],label='pendulum angle')
         ax2.set_ylabel("Pendulum Angle (rads)",color="blue")
         plt.show()
-        fig.savefig(r'C:\Users\jsalm\Documents\UF\PhD\Spring 2021\BME6938-Neuromechanics\save_bin\force_angle_graph.jpg',dpi=200,bbox_inches='tight')
+        fig.savefig(os.path.join(save_bin,'force_angle_graph.jpg'),dpi=200,bbox_inches='tight')
     
 
 
 if __name__ == "__main__":
     #website: https://nbviewer.jupyter.org/github/demotu/BMC/blob/master/notebooks/MuscleModeling.ipynb
-    Ttot = 2
-    # total time in second
-    f_s = 1000 # sample frequency (samples/s)
-    t_s = np.arange(0,Ttot,1/f_s)
-    t_ms = np.arange(0,Ttot*f_s,1)
-    delay_ms = 1
-    time_delay = int(f_s/1000*delay_ms)
-    oc = 2*np.sin(t_s*(20))
-    maxpeaks = 5 #max number of peaks to keep in frequency output
-    iterable  = np.arange(5,50,1)
-    coeff_name = 't1'
-    fname = 't1 vs frequency'
-    ampstore = []
-    frqstore = []
+    coeff = [2,2.5,35,35,17.5,17.5*3,6] #bc, wc, h1, h2, t1, t2, c1
+    coeffspring = [20000,63.5,0,.17,1] # kc, mc, ac, dc, spring_gain
+    initial_cond_mats = np.array([np.pi/7,np.pi/14,0,0])
+    initial_cond_spring = [.2,0]
+    mgain = 800
     
-    for j in iterable:
-        initial_cond_mats = np.array([np.pi/7,np.pi/14,0,0])
-        initial_cond_pend = [np.pi/8,0]
-        coeff = [2.5,2.5,30,30,j,55*3,2] #bc, wc, h1, h2, t1, t2, c1
-        mats = Matsuoka(initial_cond_mats,coeff)
-        pend = Pendulum(t_s,initial_cond_pend)
-        
-        for i in range(0,len(t_ms)-1):
-            t_ms_i = [t_ms[i],t_ms[i+1]]
-            t_s_i = [t_s[i],t_s[i+1]]
-            X_i = mats.solve(t_ms_i,oc[i])
-        
-        X = np.stack(mats.storeX)
-        freq, X1_fft = generate_power_spec(X[:,0],f_s,1)
-        _, X2_fft = generate_power_spec(X[:,1],f_s,1)
-        
-        X1_peaks = find_peaks(X1_fft)[0][:maxpeaks]
-        X2_peaks = find_peaks(X2_fft)[0][:maxpeaks]
-        
-        X1_frqs = freq[X1_peaks]
-        X2_frqs = freq[X2_peaks]
-        
-        avgfrq1 = comp_avg_frq(X1_fft[X1_peaks],X1_frqs)
-        avgfrq2 = comp_avg_frq(X2_fft[X2_peaks],X2_frqs)
-        
-        frqstore.append([avgfrq1,avgfrq2])
-        ampstore.append([max(X[:,0])-min(X[:,0]),max(X[:,0])-min(X[:,0])])
-        
-    fig = plt.figure('frequency vs {}'.format(coeff_name))
-    plt.subplot(2,1,1)
-    plt.plot(iterable,np.stack(frqstore)[:,0],label='neuron 1')
-    plt.plot(iterable,np.stack(frqstore)[:,1],label='neuron 2')
-    plt.xlabel('{}'.format(coeff_name))
-    plt.ylabel('frequency (Hz)')
-    plt.grid(linestyle='--',linewidth='1')
-    plt.legend()
-    plt.subplot(2,1,2)
-    plt.plot(iterable,np.stack(ampstore)[:,0],label='neuron 1')
-    plt.plot(iterable,np.stack(ampstore)[:,1],label='neuron 2')
-    plt.xlabel('{}'.format(coeff_name))
-    plt.ylabel('wave amplitude')
-    plt.legend()
-    plt.grid(linestyle='--',linewidth='1')
-    plt.tight_layout()
-    plt.show()
-    fig.savefig(r'C:\Users\jsalm\Documents\UF\PhD\Spring 2021\BME6938-Neuromechanics\save_bin\{}.jpg'.format(fname),dpi=200,bbox_inches='tight')
+    mech = Muscle_Mech(mgain)
+    mats = Matsuoka(initial_cond_mats,coeff,initial_cond_spring[0])
+    springmass = SpringMass(mech.t_s,initial_cond_spring,coeffspring)    
+    mech.hoping_model(mats,springmass,20,initial_cond_mats,coeff)
+    plt.close('all')
     
 
     #X = mats.plot_store(t_ms,'matsuoka model')

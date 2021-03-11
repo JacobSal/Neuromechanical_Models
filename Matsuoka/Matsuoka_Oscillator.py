@@ -26,7 +26,12 @@ class Matsuoka():
         
     def check_condition(self):
         return (self.t2-self.t1)**2 <= 4*self.t2*self.t1*self.bc
-        
+    
+    def Stim(self,func,t):
+        i = np.where(self.t >= t)[0][0]        
+        func = func[int(i)-1]
+        return func
+    
     @staticmethod
     def dALLdt(X,t,self,oc):
         """
