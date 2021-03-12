@@ -18,9 +18,9 @@ if __name__ == '__main__':
 
     initial_cond_mats = np.array([np.pi/7,np.pi/14,0,0])
     initial_cond_spring = [.2,0]
-    iterable = np.arange(30,100,2)
-    coeff_name = 'h1_3'
-    fname = 'h1_3 vs frequency'
+    iterable = np.arange(0,30,.5)
+    coeff_name = 'B'
+    fname = 'B vs frequency'
     avgfrq = []
     ampstore = []
     
@@ -29,12 +29,12 @@ if __name__ == '__main__':
     frqstore = []
     #Loop
     for j in iterable:
-        coeff = [2,2.5,j,j,22,22*3,6] #bc, wc, h1, h2, t1, t2, c1
+        coeff = [j,2.5,35,35,17.5,17.5*3,6] #bc, wc, h1, h2, t1, t2, c1
         coeffspring = [20000,63.5,0,.17,1] # kc, mc, ac, dc, spring_gain
-        mech = mm.Muscle_Mech(500)
+        mech = mm.Muscle_Mech(1.65)
         mats = mm.Matsuoka(initial_cond_mats,coeff,initial_cond_spring[0])
         springmass = mm.SpringMass(mech.t_s,initial_cond_spring,coeffspring)    
-        mech.hoping_model(mats,springmass,20,initial_cond_mats,coeff)
+        mech.hoping_model(mats,springmass,20,initial_cond_mats,coeff,False)
         plt.close('all')
         X = np.stack(mats.storeX)
         frqstore.append([mech._avg_freq_profile(X[:,0],maxpeaks),mech._avg_freq_profile(X[:,1],maxpeaks)])

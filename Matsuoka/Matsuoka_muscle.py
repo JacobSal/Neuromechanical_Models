@@ -8,6 +8,7 @@ import os
 from scipy.fftpack import fft,fftfreq
 from scipy.integrate import odeint, RK45
 from scipy.signal import find_peaks
+import tripple_pend_ex as tpp
 
 dirname = os.path.dirname(__file__)
 save_bin = os.path.join(dirname,"save_bin")
@@ -198,7 +199,7 @@ class SpringMass():
         return dydt[0,0], dydt[1,0]
         """
         if y1 <= 0:
-            foft = func
+            foft = func*self.springgain
             dydt = y2
             dydtdt = foft/self.mc - (self.kc/self.mc)*y1-(self.cf/self.mc)*y2 - self.g
         else:
@@ -352,7 +353,7 @@ class Muscle_Mech(DomainFinder):
             #     if abs(avgfrq1[-2]-avgfrq2[-1]) < 0.1 and count == 0:
             #         print("reached steady state")
             
-    def hoping_model(self,matsuoka,springmass,affgain,n_i,coeff):
+    def hoping_model(self,matsuoka,springmass,affgain,n_i,coeff,plot=False):
         delay_ms = 1 #delay in ms
         time_delay = int(self.f_s/1000*delay_ms) #delay in samples based on sample rate
         print('starting diffeq solver...')
@@ -382,12 +383,46 @@ class Muscle_Mech(DomainFinder):
             #     bb += 1 
             #     avgfrq.append([self._avg_freq_profile(np.stack(matsuoka.storeX)[bb:ub,0],5),
             #                    self._avg_freq_profile(np.stack(matsuoka.storeX)[bb:ub,1],5)])
-
-        Xp = springmass.plot_store()
-        matsuoka.plot_store(self.t_ms,'coeff_{}'.format(coeff),"Mass Height (m)")
-        self.plot_torque_spring(springmass)
-        plt.waitforbuttonpress()
-        return 0
+        if plot:
+            Xp = springmass.plot_store()
+            matsuoka.plot_store(self.t_ms,'coeff_{}'.format(coeff),"Mass Height (m)")
+            self.plot_torque_spring(springmass)
+            plt.waitforbuttonpress()
+        else:
+            return 0
+    
+    def three_pend_model(self,matsuoka1,matsuoka2):
+        delay_ms = 1 #delay in ms
+        time_delay = int(self.f_s/1000*delay_ms) #delay in samples based on sample rate
+        print('starting diffeq solver...')
+        ub = 0
+        bb = 0
+        count = 0
+        avgfrq = []
+        for i in range(0,len(self.t_ms)-1):
+            #Initia time and Pendulum diffeq
+            t_ms = [self.t_ms[i],self.t_ms[i+1]]
+            t_s = [self.t_s[i],self.t_s[i+1]]            
+            Xp = tpp.integrate_pendulum(n=2, times=t_s)   
+            ub += 1
+            #delay iteration of force from muscle and activation of neurons
+            if i > time_delay:
+                mats_X = [matsuoka1.solve(t_ms,Xp[-1,1]),matsuoka1.solve(t_ms,Xp[-1,1])]                
+                y = self.stim(mats_X[-1,0],mats_X[-1,1])
+                pendulum.force = self.muscle_torque(y)     
+            else:
+                matsuoka.storeX.append(n_i)
+                matsuoka.storeoc.append(0)
+                pendulum.force = 0
+                self.storeT.append(0)
+                self.storeL.append([0,0])
+            #judging steady states using average frequency of top 5 peaks
+            # if ub > 500:
+            #     bb += 1 
+            #     avgfrq1.append(self._avg_freq_profile(np.stack(matsuoka.storeX)[bb:ub,0],5,self.f_s))
+            #     avgfrq2.append(self._avg_freq_profile(np.stack(matsuoka.storeX)[bb:ub,1],5,self.f_s))
+            #     if abs(avgfrq1[-2]-avgfrq2[-1]) < 0.1 and count == 0:
+            #         print("reached steady state")        
     
     def plot_torque_spring(self,spring):
         torque = np.stack(self.storeT)
@@ -441,12 +476,12 @@ if __name__ == "__main__":
     coeffspring = [20000,63.5,0,.17,1] # kc, mc, ac, dc, spring_gain
     initial_cond_mats = np.array([np.pi/7,np.pi/14,0,0])
     initial_cond_spring = [.2,0]
-    mgain = 800
+    mgain = 1.65
     
     mech = Muscle_Mech(mgain)
     mats = Matsuoka(initial_cond_mats,coeff,initial_cond_spring[0])
     springmass = SpringMass(mech.t_s,initial_cond_spring,coeffspring)    
-    mech.hoping_model(mats,springmass,20,initial_cond_mats,coeff)
+    mech.hoping_model(mats,springmass,20,initial_cond_mats,coeff,True)
     plt.close('all')
     
 
