@@ -8,11 +8,19 @@ import os
 from scipy.fftpack import fft,fftfreq
 from scipy.integrate import odeint, RK45
 from scipy.signal import find_peaks
-import tripple_pend_ex as tpp
+
+from sympy import symbols
+from sympy.physics import mechanics
+
+from sympy import Dummy, lambdify
+
+#animation functions
+from matplotlib import animation
 
 dirname = os.path.dirname(__file__)
 save_bin = os.path.join(dirname,"save_bin")
-        
+
+#%%       
 class Matsuoka():    
     def __init__(self,initial_cond,coeff,ioc):
         """Full Matsuoka Neural Oscillator"""
@@ -107,7 +115,8 @@ class Matsuoka():
         fig.savefig(os.path.join(save_bin,'{}.png'.format(n_name)),dpi=200,bbox_inches='tight')
         
         return X
-    
+
+#%%
 class Pendulum():
     def __init__(self,t,initial_cond):
         pendfreq = 0.1 #set this
@@ -161,6 +170,202 @@ class Pendulum():
         self.storeX.append([Xp[-1,0],Xp[-1,1]])
         return Xp
 
+#%%
+class TpPendulum():
+    def __init__(self,n,initial_cond,coeff,t,f_s):
+        self.storeP = []
+        self.storeT = []
+        self.coeff = coeff #lengths, masses, dampening
+        self.n = n
+        self.inital_cond = [initial_cond]
+        self.prev_cond = np.concatenate([np.broadcast_to(initial_cond[0], n),
+                                        np.broadcast_to(initial_cond[1], n)])
+        self.gradient = None
+        self.storeP = []
+        self.t = t
+        self.f_s = f_s
+        self.work = 0
+        self.counter = 0
+        
+    def create_pendulum(self,times,exforce):
+        """Integrate a multi-pendulum with `n` sections"""
+        lengths = self.coeff[0]
+        masses = self.coeff[1]
+        dampening = self.coeff[2]
+        n = self.n
+        self.storeT.append(exforce)
+        #-------------------------------------------------
+        # Step 1: construct the pendulum model
+        
+        # Generalized coordinates and velocities
+        # (in this case, angular positions & velocities of each mass) 
+        q = mechanics.dynamicsymbols('q:{0}'.format(n))
+        u = mechanics.dynamicsymbols('u:{0}'.format(n))
+    
+        # mass and length and dampening
+        m = symbols('m:{0}'.format(n))
+        l = symbols('l:{0}'.format(n))
+        k = symbols('k:{0}'.format(n))
+    
+        # gravity and time symbols
+        g, t = symbols('g,t')
+        
+        #force
+        f = symbols('f:{0}'.format(n))
+        
+        #--------------------------------------------------
+        # Step 2: build the model using Kane's Method
+    
+        # Create pivot point reference frame
+        A = mechanics.ReferenceFrame('A')
+        P = mechanics.Point('P')
+        P.set_vel(A, 0)
+    
+        # lists to hold particles, forces, and kinetic ODEs
+        # for each pendulum in the chain
+        particles = []
+        forces = []
+        kinetic_odes = []
+    
+        for i in range(n):
+            # Create a reference frame following the i^th mass
+            Ai = A.orientnew('A' + str(i), 'Axis', [q[i], A.z])
+            Ai.set_ang_vel(A, u[i] * A.z)
+    
+            # Create a point in this reference frame
+            Pi = P.locatenew('P' + str(i), l[i] * Ai.x)
+            Pi.v2pt_theory(P, A, Ai)
+    
+            # Create a new particle of mass m[i] at this point
+            Pai = mechanics.Particle('Pa' + str(i), Pi, m[i])
+            particles.append(Pai)
+    
+            # Set forces & compute kinematic ODE
+            forces.append((Pi, f[i]*A.x-m[i]*g*A.y))
+            kinetic_odes.append(q[i].diff(t) - u[i]*k[i])
+    
+            P = Pi
+    
+        # Generate equations of motion
+        KM = mechanics.KanesMethod(A, q_ind=q, u_ind=u,
+                                   kd_eqs=kinetic_odes)
+        fr, fr_star = KM.kanes_equations(particles, forces)
+        
+        #-----------------------------------------------------
+        # Step 3: numerically evaluate equations and integrate
+    
+        # initial positions and velocities – assumed to be given in degrees
+            
+        # lengths and masses
+        if lengths is None:
+            lengths = np.ones(n) / n
+        lengths = np.broadcast_to(lengths, n)
+        masses = np.broadcast_to(masses, n)
+        exforces = np.broadcast_to(exforce,n)
+        damp = np.broadcast_to(dampening,n)
+    
+        # Fixed parameters: gravitational , lengths, and masses
+        parameters = [g] + list(l) + list(m) + list(f) + list(k)
+        parameter_vals = [9.81] + list(lengths) + list(masses) + list(exforces) + list(damp)
+    
+        # define symbols for unknown parameters
+        dynamic = q + u
+        unknowns = [Dummy() for i in dynamic]
+        unknown_dict = dict(zip(dynamic, unknowns))
+        kds = KM.kindiffdict()
+        
+        # substitute unknown symbols for qdot terms
+        mm_sym = KM.mass_matrix_full.subs(kds).subs(unknown_dict)
+        fo_sym = KM.forcing_full.subs(kds).subs(unknown_dict)
+    
+        # create functions for numerical calculation
+        mm_func = lambdify(unknowns + parameters, mm_sym)
+        fo_func = lambdify(unknowns + parameters, fo_sym)
+        
+        def gradient(y, t, args):
+            vals = np.concatenate((y, args))
+            sol = np.linalg.solve(mm_func(*vals), fo_func(*vals))
+            return np.array(sol).T[0]
+        
+        def _work_calc(work,counter):
+            n = len(self.storeP[counter]) // 2
+            if counter > 1:
+                dtheta = abs(self.storeP[counter][:n] - self.storeP[counter-1][:n])
+                dTor = abs(np.array(self.storeT[counter]) - np.array(self.storeT[counter-1]))
+                work = work + dTor/dtheta
+            else:
+                work = work
+            return work
+        
+        Xp = odeint(gradient, self.prev_cond, times,tcrit = times, args=(parameter_vals,))
+        self.work = _work_calc(self.work,self.counter)        
+        self.counter += 1
+        self.prev_cond = Xp[-1,:]
+        self.storeP.append(Xp[-1,:])
+        return Xp
+    
+    def _conv_ang(Xp):
+        return Xp + np.pi/2
+        
+        
+    def get_xy_coords(self):
+        """Get (x, y) coordinates from generalized coordinates p"""
+        p = np.atleast_2d(np.stack(self.storeP))
+        n = p.shape[1] // 2
+        lengths = np.array(self.coeff[0])
+        if lengths is None:
+            lengths = np.ones(n) / n
+        zeros = np.zeros(p.shape[0])[:, None]
+        x = np.hstack([zeros, lengths * np.cos(p[:, :n])])
+        y = np.hstack([zeros, lengths * np.sin(p[:, :n])])
+        return np.cumsum(x, 1), np.cumsum(y, 1)
+    
+    def plot_pendulum_trace(self):
+        plt.close("triple Pendulum Trace")
+        x, y = self.get_xy_coords()
+        lim = max(self.coeff[0])*self.n
+        plt.figure("triple Pendulum Trace")
+        plt.plot(x, y);
+        plt.xlim(-lim,lim)
+        plt.ylim(-lim,lim)
+        plt.xlabel("position (m)")
+        plt.ylabel("position (m)")
+        plt.show()
+        # plt.close()
+        return 0
+    
+    def set_new_tpp(self,Xp,n_p):
+        n = Xp.shape[1] // 2
+        n_p_new = n_p.copy()
+        n_p_new[0] = list(Xp[-1,:n])
+        n_p_new[1] = list(Xp[-1,n:])
+        return n_p_new
+        
+    def animate_pendulum(self,):
+        x, y = self.get_xy_coords()
+        lim = max(self.coeff[0])*self.n
+        fig, ax = plt.subplots(figsize=(6, 6))
+        fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+        ax.axis('off')
+        ax.set(xlim=(-lim, lim), ylim=(-lim, lim))
+    
+        line, = ax.plot([], [], 'o-', lw=2)
+    
+        def init():
+            line.set_data([], [])
+            return line,
+    
+        def animate(i):
+            line.set_data(x[i], y[i])
+            return line,
+    
+        anim = animation.FuncAnimation(fig, animate, frames=len(self.t),
+                                       interval=self.f_s * self.t.max() / len(self.t),
+                                       blit=True, init_func=init)
+        # plt.close(fig)
+        return anim
+
+#%%
 class SpringMass():
     #use cham et al 2007
     g = 9.81
@@ -232,6 +437,7 @@ class SpringMass():
         return Xp
     
 
+#%%
 class DomainFinder():
     def __init__(self):
         self.storex = []
@@ -243,24 +449,27 @@ class DomainFinder():
         ymax = np.max(self.storey)
         ymin = np.min(self.storey)
         return (xmin,xmax),(ymax,ymin)
-        
+ 
+#%%       
 class Muscle_Mech(DomainFinder):
-    Ttot = 3
+    Ttot = 5
     # total time in second
-    f_s = 1000 # sample frequency (samples/s)
+    f_s = 200 # sample frequency (samples/s)
     t_s = np.arange(0,Ttot,1/f_s)
     t_ms = np.arange(0,Ttot*f_s,1)
     
     def __init__(self,musclegain):
-        self.storeT = [0]
-        self.storeL = [[0,0]]
+        # n = 3
+        self.storeT = []
+        self.storeL = []
+        self.storeP = []
         self.musclegain = musclegain
         
     def stim(self,x1,x2):        
         y1=max(x1,0)
         y2=max(x2,0)
         y=y1-y2
-        return y1,y2,y
+        return (y1,y2,y)
     
     def force_length(self,a,c,dist,theta,Fres,pendR):
         Lmax = dist**2+pendR**2
@@ -290,7 +499,7 @@ class Muscle_Mech(DomainFinder):
     def muscle_torque(self,y):
         #for previous implmentation of this in HH model see HodgkinHuxley folder
         torque = y*self.musclegain
-        self.storeT.append(torque)
+        # self.storeT.append(torque)
         return torque
     
     def __generate_power_spec(self,X,f_s,startfrq):
@@ -377,7 +586,7 @@ class Muscle_Mech(DomainFinder):
                 matsuoka.storeX.append(n_i)
                 matsuoka.storeoc.append(Xp[-1,0])
                 springforce = 0
-                self.storeT.append(0)
+                # self.storeT.append(0)
             # judging steady states using average frequency of top 5 peaks
             # if ub > 500:
             #     bb += 1 
@@ -391,38 +600,71 @@ class Muscle_Mech(DomainFinder):
         else:
             return 0
     
-    def three_pend_model(self,matsuoka1,matsuoka2):
+    def three_pend_model(self,matsuoka,pendulum,n_i,n_p,n=3,plot=True):
+        """
+        
+
+        Parameters
+        ----------
+        matsuoka1 : obj
+            DESCRIPTION.
+        matsuoka2 : obj
+            DESCRIPTION.
+        matsuoka3 : obj
+            DESCRIPTION.
+        n_i : list of ints
+            DESCRIPTION.
+        n_p : list of lists
+            n_p[0] = initial position, n_p[1] = initial_velocities for n segments. 
+            n_p[2] = lengths, n_p[3] = masses, n_p[4] = dampening
+
+        Returns
+        -------
+        None.
+
+        """
         delay_ms = 1 #delay in ms
         time_delay = int(self.f_s/1000*delay_ms) #delay in samples based on sample rate
         print('starting diffeq solver...')
         ub = 0
         bb = 0
         count = 0
+        muscle_forces = np.broadcast_to(0,n)
         avgfrq = []
+        self.storeT.append([0,0,0])
+        pendulum.storeP.append(np.array(n_p).reshape(n*2,))
         for i in range(0,len(self.t_ms)-1):
             #Initia time and Pendulum diffeq
             t_ms = [self.t_ms[i],self.t_ms[i+1]]
             t_s = [self.t_s[i],self.t_s[i+1]]            
-            Xp = tpp.integrate_pendulum(n=2, times=t_s)   
+            Xp = pendulum.create_pendulum(t_s,muscle_forces)
+            ang = TpPendulum._conv_ang(Xp[-1,:n])
             ub += 1
             #delay iteration of force from muscle and activation of neurons
             if i > time_delay:
-                mats_X = [matsuoka1.solve(t_ms,Xp[-1,1]),matsuoka1.solve(t_ms,Xp[-1,1])]                
-                y = self.stim(mats_X[-1,0],mats_X[-1,1])
-                pendulum.force = self.muscle_torque(y)     
+                mats_X1 = [matsuoka[i].solve(t_ms,ang[i]) for i in range(n)] 
+                y = [self.stim(mats_X1[i][-1,0],mats_X1[0][-1,1]) for i in range(len(mats_X1))]
+                muscle_forces = [self.muscle_torque(y[i][2]) for i in range(len(mats_X1))]
+                self.storeT.append(muscle_forces)
             else:
-                matsuoka.storeX.append(n_i)
-                matsuoka.storeoc.append(0)
-                pendulum.force = 0
-                self.storeT.append(0)
-                self.storeL.append([0,0])
+                #default storage
+                [matsuoka[i].storeX.append(n_i) for i in range(n)]
+                [matsuoka[i].storeoc.append(ang[i]) for i in range(n)]
+                self.storeT.append(muscle_forces)    
             #judging steady states using average frequency of top 5 peaks
             # if ub > 500:
             #     bb += 1 
             #     avgfrq1.append(self._avg_freq_profile(np.stack(matsuoka.storeX)[bb:ub,0],5,self.f_s))
             #     avgfrq2.append(self._avg_freq_profile(np.stack(matsuoka.storeX)[bb:ub,1],5,self.f_s))
             #     if abs(avgfrq1[-2]-avgfrq2[-1]) < 0.1 and count == 0:
-            #         print("reached steady state")        
+            #         print("reached steady state")    
+        if plot:
+            pendulum.plot_pendulum_trace()
+            [matsuoka[i].plot_store(self.t_ms,'coeff_{0}_N{1}'.format(n_i,i),"Mass Angle (rad)") for i in range(n)]
+            self.plot_pend_torq(TpPendulum._conv_ang(np.stack(pendulum.storeP)[:,:n]))
+            plt.waitforbuttonpress()
+        else:
+            return 0
     
     def plot_torque_spring(self,spring):
         torque = np.stack(self.storeT)
@@ -431,7 +673,7 @@ class Muscle_Mech(DomainFinder):
         plt.title('plot_torque_length')
         fig.set_size_inches(18.5,10.5)
         ax.plot(self.t_ms,torque,color="red",alpha = 0.5,label='torque')
-        ax.set_xlabel('time (s)')
+        ax.set_xlabel('time (ms)')
         ax.set_ylabel('Force (N)',color="red")
         ax2=ax.twinx()
         ax2.plot(self.t_ms,length,alpha = 0.7, label='Length')
@@ -446,7 +688,7 @@ class Muscle_Mech(DomainFinder):
         plt.title('plot_torque_length')
         fig.set_size_inches(18.5,10.5)
         ax.plot(self.t_ms,torque,color="red",label='torque')
-        ax.set_xlabel('time (s)')
+        ax.set_xlabel('time (ms)')
         ax.set_ylabel('Torque (Nm)',color="red")
         ax2=ax.twinx()
         ax2.plot(self.t_ms,length,label='Length')
@@ -460,29 +702,37 @@ class Muscle_Mech(DomainFinder):
         plt.title('plot_torque_pend')
         fig.set_size_inches(18.5,10.5)
         ax.plot(self.t_ms,torque,color="red",label='torque')
-        ax.set_xlabel('time (s)')
+        ax.set_xlabel('time (ms)')
         ax.set_ylabel('Torque (Nm)',color="red")
         ax2=ax.twinx()
-        ax2.plot(self.t_ms,Xp[:,1],label='pendulum angle')
+        ax2.plot(self.t_ms,Xp,label='pendulum angle')
         ax2.set_ylabel("Pendulum Angle (rads)",color="blue")
         plt.show()
         fig.savefig(os.path.join(save_bin,'force_angle_graph.jpg'),dpi=200,bbox_inches='tight')
     
 
-
+#%%
 if __name__ == "__main__":
     #website: https://nbviewer.jupyter.org/github/demotu/BMC/blob/master/notebooks/MuscleModeling.ipynb
-    coeff = [2,2.5,35,35,17.5,17.5*3,6] #bc, wc, h1, h2, t1, t2, c1
-    coeffspring = [20000,63.5,0,.17,1] # kc, mc, ac, dc, spring_gain
+    coeff = [2,2.5,12,12,55,55*3,6] #bc, wc, h1, h2, t1, t2, c1
+    pos = -np.pi/4
+    vel = 1
+    pendfreq = 0.1 #set this
+    radfreq = pendfreq*2*np.pi
+    l1 = 9.81/1000/(radfreq**2)
+    m1 = .1
     initial_cond_mats = np.array([np.pi/7,np.pi/14,0,0])
-    initial_cond_spring = [.2,0]
-    mgain = 1.65
+    initial_cond_tpp = [[pos,pos*.9,pos*.8],[vel,vel*.8,vel*.9]]
+    coeff_tpp = [[l1,l1,l1],[m1,m1,m1],1]
+    mgain = 0.01
+    n = 3
     
     mech = Muscle_Mech(mgain)
-    mats = Matsuoka(initial_cond_mats,coeff,initial_cond_spring[0])
-    springmass = SpringMass(mech.t_s,initial_cond_spring,coeffspring)    
-    mech.hoping_model(mats,springmass,20,initial_cond_mats,coeff,True)
+    mats = [Matsuoka(initial_cond_mats,coeff,TpPendulum._conv_ang(initial_cond_tpp[0][i])) for i in range(3)]
+    pend = TpPendulum(n,initial_cond_tpp,coeff_tpp,mech.t_s,mech.f_s)
+    mech.three_pend_model(mats,pend,initial_cond_mats,initial_cond_tpp)
     plt.close('all')
+    anim = pend.animate_pendulum()
     
 
     #X = mats.plot_store(t_ms,'matsuoka model')
