@@ -27,8 +27,8 @@ if __name__ == '__main__':
     initial_cond_tpp = [[pos],[vel]]
     num = 30
     iterable = np.arange(num/10,num*10,num)
-    coeff_name = 't1'
-    fname = 't1 vs frequency'
+    coeff_name = 'B'
+    fname = 'B vs frequency'
     avgfrq = []
     ampstore = []
     
