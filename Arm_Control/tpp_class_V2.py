@@ -43,7 +43,7 @@ class DbPendulum():
         self.musclegain = mgain
         self.storeT = [np.broadcast_to(mgain,n*2)] #store force values
     
-    def controller(self,angi,veli,i):
+    def controller1(self,angi,veli,i):
         angd = self.angd[i]
         angj = angi + np.pi/2
         dtheta = angd-angi
@@ -114,7 +114,7 @@ class TpPendulum():
         self.musclegain = mgain
         self.storeT = [np.broadcast_to(0,2)] #store force values
         
-    def controller(self,angi,i):
+    def controller1(self,angi,i):
         # angj = angi + np.pi/2
         angd = self.angd[i]
         dtheta = angd-angi
@@ -129,6 +129,22 @@ class TpPendulum():
         else:
             pass
         return force
+    
+    def controller2(self,angi,i):
+        # angj = angi + np.pi/2
+        angd = self.angd[i]
+        dtheta = angd-angi
+        bound = 0.001
+        force = 0
+        # if angi < np.pi/2 and i == 0:
+            # forcex = self.musclegain*np.cos(angj)*dtheta
+        if dtheta > bound:
+            force = self.musclegain*dtheta
+        elif dtheta < -bound:
+            force = self.musclegain*dtheta
+        else:
+            pass
+        return force    
     
     @staticmethod
     def dALLdt(y, t, self, f1, f2):
@@ -156,7 +172,7 @@ class TpPendulum():
         return theta1dot,theta2dot,z1dot, z2dot
 
     def solve(self,t):
-        force = np.hstack([self.controller(self.prev_cond[i],i) for i in range(2)])
+        force = np.hstack([self.controller1(self.prev_cond[i],i) for i in range(2)])
         f1 = force[0]
         f2 = force[1]
         Xp = odeint(self.dALLdt, self.prev_cond, t, tcrit = t, args=(self,f1,f2))

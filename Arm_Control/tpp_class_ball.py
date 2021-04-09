@@ -1,6 +1,6 @@
 import sys, os
 sys.path.append(r'C:\Users\jsalm\Documents\UF\PhD\Spring 2021\BME6938-Neuromechanics\Berkely Modanna\Py Mimicks')
-
+"new commit"
 import numpy as np
 import scipy as sp
 import pylab as plt
@@ -31,6 +31,7 @@ class Ball():
         self.storeX = [initial_cond]
         self.g = 9.81 #m/s**2
         self.storeB = []
+        self.storeF = []
     
     @staticmethod
     def dALLdt(X,t,self):
@@ -39,7 +40,7 @@ class Ball():
             dhdt = v
             dvdt = -self.g
         elif int(h) <= 0:
-            dhdt = v
+            dhdt = 0
             dvdt = -self.e*dhdt
         return dhdt,dvdt
     
@@ -48,6 +49,63 @@ class Ball():
         self.prev_cond = Xp[-1,:]
         self.storeB.append(Xp[-1,:])
         return Xp 
+    def calc_theta(self,x0,y0,x1,y1):
+        return np.arcsin((x1-x0)/np.sqrt((x1-x0)**2+(y1-y0)**2))
+    
+    def calc_force(self,vel,dt):
+        return vel/dt*self.m
+    
+    def simple_ball(self,vel0,x0,y0,dt,theta,obstacle):
+        """
+        vel0: Type int
+            initial velocity in the horizontal plane
+        y0: Type int
+            initial position in the verticla axis
+        x0: Type int
+            initial position in the horizontal axis
+        e: Type float
+            elasticity parameter
+        theta: Type float (Rads)
+            angle at which the ball hits the obstacle
+        obstacle: Type list of tuples
+        """
+        airres = 1
+        vel = vel0*airres
+        x = vel*dt+x0
+        y = -9.81*dt*dt+y0
+        close = np.array([(x0-x,y0-y) for x,y in obstacle])
+        if np.any(abs(close)<0.01) or y0<=0: #pretty close so lets just stick the ball to the obstacle (perfect catch)
+            vel = 0
+            x,y = x0,y0
+        #     theta = self.calc_theta(x0,y0,xf,yf)
+        #     vel = -self.e*vel0
+        #     x = vel*dt*np.cos(theta) + x0
+        #     y = -9.81*dt*dt+vel*dt*np.sin(theta) + y0
+        # else:
+        #     vel = vel0
+        #     x = vel*dt+x0
+        #     y = -9.81*dt*dt+y0
+        self.storeB.append([vel,x,y])
+        return vel,x,y
+    
+    def plot_ball_trace(self):
+        plt.close("ball Trace")
+        x = np.stack(self.storeB)[:,1]
+        y = np.stack(self.storeB)[:,2]
+        lim = np.max(np.stack(self.storeB)[:,1:])
+        plt.figure("ball Trace")
+        plt.plot(x, y);
+        plt.xlim(-lim-.5,lim+.5)
+        plt.ylim(-lim-.5,lim+.5)
+        plt.xlabel("position (m)")
+        plt.ylabel("position (m)")
+        plt.show()
+        # plt.close()
+        plt.savefig(os.path.join(save_bin,'xy_trace_ball.png'),dpi=200,bbox_inches='tight')
+        return 0
+            
+            
+        
         
 
 #%%
@@ -66,7 +124,24 @@ class TpPendulum():
         self.angd = [np.pi/8,-np.pi/8]
         self.musclegain = mgain
         self.storeT = [np.broadcast_to(0,2)] #store force values
-        
+        x,y = self.get_xy()
+        self.x = x[0,2]
+        self.y = y[0,2]
+    def calc_theta(self,x0,y0,x1,y1):
+        return np.arcsin((x1-x0)/np.sqrt((x1-x0)**2+(y1-y0)**2))
+    
+    def get_xy(self):
+        """Get (x, y) coordinates from generalized coordinates p"""
+        p = np.atleast_2d(self.prev_cond)
+        n = p.shape[1] // 2
+        lengths = np.array(self.coeff[0])
+        if lengths is None:
+            lengths = np.ones(n) / n
+        zeros = np.zeros(p.shape[0])[:, None]
+        x = np.hstack([zeros, lengths * np.sin(p[:, :n])])
+        y = np.hstack([zeros, -lengths * np.cos(p[:, :n])])
+        return np.cumsum(x, 1), np.cumsum(y, 1)
+    
     def controller1(self,angi,i):
         # angj = angi + np.pi/2
         angd = self.angd[i]
@@ -83,21 +158,21 @@ class TpPendulum():
             pass
         return force
     
-    def controller2(self,angi,i):
+    def controller2(self,x1,y1,i):
+        #look in blue book: determine the ball angle to the origin and reduce that angle of the arm
+        #relative to the ball angle from origin.
         # angj = angi + np.pi/2
-        angd = self.angd[i]
-        dtheta = angd-angi
+        x,y = self.get_xy()
+        dist = np.sqrt((x1-x[0,i+1])**2+(y1-y[0,i+1])**2)
         bound = 0.001
         force = 0
-        # if angi < np.pi/2 and i == 0:
-            # forcex = self.musclegain*np.cos(angj)*dtheta
-        if dtheta > bound:
-            force = self.musclegain*dtheta
-        elif dtheta < -bound:
-            force = self.musclegain*dtheta
+        if dist > bound:
+            force = self.musclegain*-dist
+        elif dist < -bound:
+            force = self.musclegain*dist
         else:
             pass
-        return force    
+        return force
     
     @staticmethod
     def dALLdt(y, t, self, f1, f2):
@@ -124,8 +199,8 @@ class TpPendulum():
             
         return theta1dot,theta2dot,z1dot, z2dot
 
-    def solve(self,t):
-        force = np.hstack([self.controller1(self.prev_cond[i],i) for i in range(2)])
+    def solve(self,t,x0,y0):
+        force = [self.controller2(x0,y0,i) for i in range(0,2)]
         f1 = force[0]
         f2 = force[1]
         Xp = odeint(self.dALLdt, self.prev_cond, t, tcrit = t, args=(self,f1,f2))
@@ -284,10 +359,15 @@ if __name__ == "__main__":
     m2 = 5.715264/3
     damp = 5
     #mech
-    mgain = 10
+    mgain = 100
     #ball
     e = 1 #coefficient of restitution
     mass = 2
+    obstacle = []
+    vel = 3
+    y = 1
+    x = -1
+    theta = 0
     ### Time ###
     Ttot = 5 # total time in second
     f_s = 500 # sample frequency (samples/s)
@@ -301,18 +381,20 @@ if __name__ == "__main__":
     ### INIT ###
     Arm = TpPendulum(n,initial_cond_tpp,coeff_tpp,mgain,t_s,f_s)
     mech = Muscle_Mech(mgain,f_s,t_s)
-    ball = Ball(t_s,e,mass,initial_cond_ball)
+    Ball = Ball(t_s,e,mass,initial_cond_ball)
     
     for i in range(0,len(t_s)-1):
         t = [t_s[i],t_s[i+1]]
-        f1 = 0
-        f2 = 0
-        Xp = Arm.solve(t)
-        Bp = ball.solve(t)
+        dt = abs(t_s[i+1] - t_s[i])
+        vel,x,y = Ball.simple_ball(vel,x,y,dt,theta,obstacle)
+        Xp = Arm.solve(t,x,y)
+        obstacle = [(Arm.x,Arm.y)]
+        # Bp = ball.solve(t)
     'end for'
     X = np.stack(Arm.storeP)
     T = np.stack(Arm.storeT)
-    B = np.stack(ball.storeB)
+    B = np.stack(Ball.storeB)
     Arm.plot_pendulum_trace()
+    Ball.plot_ball_trace()
     anim = Arm.animate_pendulum()
         
