@@ -8,6 +8,7 @@ import os
 from scipy.fftpack import fft,fftfreq
 from scipy.integrate import odeint, RK45
 from scipy.signal import find_peaks
+from scipy.spatial import distance
 
 from sympy import symbols
 from sympy.physics import mechanics
@@ -30,7 +31,7 @@ class Ball():
         self.prev_cond = initial_cond
         self.storeX = [initial_cond]
         self.g = 9.81 #m/s**2
-        self.storeB = []
+        self.storeB = [initial_cond]
         self.storeF = []
     
     @staticmethod
@@ -49,6 +50,7 @@ class Ball():
         self.prev_cond = Xp[-1,:]
         self.storeB.append(Xp[-1,:])
         return Xp 
+    
     def calc_theta(self,x0,y0,x1,y1):
         return np.arcsin((x1-x0)/np.sqrt((x1-x0)**2+(y1-y0)**2))
     
@@ -69,6 +71,7 @@ class Ball():
             angle at which the ball hits the obstacle
         obstacle: Type list of tuples
         """
+        ballcatch = False
         airres = 1
         vel = vel0*airres
         x = vel*dt+x0
@@ -77,16 +80,9 @@ class Ball():
         if np.any(abs(close)<0.01) or y0<=0: #pretty close so lets just stick the ball to the obstacle (perfect catch)
             vel = 0
             x,y = x0,y0
-        #     theta = self.calc_theta(x0,y0,xf,yf)
-        #     vel = -self.e*vel0
-        #     x = vel*dt*np.cos(theta) + x0
-        #     y = -9.81*dt*dt+vel*dt*np.sin(theta) + y0
-        # else:
-        #     vel = vel0
-        #     x = vel*dt+x0
-        #     y = -9.81*dt*dt+y0
+            ballcatch = True
         self.storeB.append([vel,x,y])
-        return vel,x,y
+        return vel,x,y,ballcatch
     
     def plot_ball_trace(self):
         plt.close("ball Trace")
@@ -109,7 +105,21 @@ class Ball():
         
 
 #%%
-class TpPendulum():
+# def resettable(f):
+#     import copy
+
+#     def __init_and_copy__(self, *args, **kwargs):
+#         f(self, *args)
+#         self.__original_dict__ = copy.deepcopy(self.__dict__)
+
+#         def reset(o = self):
+#             o.__dict__ = o.__original_dict__
+
+#         self.reset = reset
+
+#     return __init_and_copy__
+
+class TpPendulum(object):
     def __init__(self,n,initial_cond,coeff,mgain,t,f_s):
         self.storeP = [np.hstack(initial_cond)]
         self.coeff = coeff #lengths, masses, dampenin
@@ -123,13 +133,21 @@ class TpPendulum():
         self.work = 0
         self.angd = [np.pi/8,-np.pi/8]
         self.musclegain = mgain
+        self.fprev = [mgain*1,mgain*1]
         self.storeT = [np.broadcast_to(0,2)] #store force values
         x,y = self.get_xy()
         self.x = x[0,2]
         self.y = y[0,2]
+        
+
     def calc_theta(self,x0,y0,x1,y1):
         return np.arcsin((x1-x0)/np.sqrt((x1-x0)**2+(y1-y0)**2))
     
+    def get_thetaB(self,x0,y0):
+        return np.arctan(y0/x0)
+    
+
+        
     def get_xy(self):
         """Get (x, y) coordinates from generalized coordinates p"""
         p = np.atleast_2d(self.prev_cond)
@@ -142,25 +160,36 @@ class TpPendulum():
         y = np.hstack([zeros, -lengths * np.cos(p[:, :n])])
         return np.cumsum(x, 1), np.cumsum(y, 1)
     
-    def controller1(self,angi,i):
-        # angj = angi + np.pi/2
-        angd = self.angd[i]
-        dtheta = angd-angi
-        bound = 0.001
-        force = 0
-        # if angi < np.pi/2 and i == 0:
-            # forcex = self.musclegain*np.cos(angj)*dtheta
-        if dtheta > bound:
-            force = self.musclegain*dtheta
-        elif dtheta < -bound:
-            force = self.musclegain*dtheta
-        else:
-            pass
-        return force
+    def controller1(self,vel,x0,y0,i):
+        # feedforward
+        l1,l2 = self.coeff[0]
+        ArmRadius = l1 + l2        
+        xA,yA = self.get_xy()
+        
+        def get_BallVector(t,x0,y0,vel0):
+            airres = 1
+            error = 0
+            vel = vel0*airres
+            x = vel*t+x0+error/x0
+            y = -9.81*t**2/2+vel*t+y0+error/y0
+            return (x,y)
+        
+        predictBall = [get_BallVector(t,x0,y0,vel) for t in self.t]
+        armRadii = [(ArmRadius*np.cos(theta),ArmRadius*np.sin(theta)) for theta in np.arange(0,2*np.pi,2*np.pi/len(predictBall))]
+        store = distance.cdist(predictBall,armRadii,'euclidean')
+        val = np.argwhere(store == np.min(store))[0]
+        time = self.t[val[0]]
+        # xB,yB = predictBall[val[0]]
+        # diff = np.sqrt((xB-xA)**2+(yB-yA)**2)
+        # force = None
+        return time
+    
+    def controller1_err(self):
+        
+        pass
     
     def controller2(self,x1,y1,i):
-        #look in blue book: determine the ball angle to the origin and reduce that angle of the arm
-        #relative to the ball angle from origin.
+        #Feedback model
         # angj = angi + np.pi/2
         x,y = self.get_xy()
         dist = np.sqrt((x1-x[0,i+1])**2+(y1-y[0,i+1])**2)
@@ -175,7 +204,7 @@ class TpPendulum():
         return force
     
     @staticmethod
-    def dALLdt(y, t, self, f1, f2):
+    def dALLdt(y, t, self, f1, f2, ballcatch):
         """Return the first derivatives of y = theta1, z1, theta2, z2."""
         theta1, theta2, z1 , z2 = y
         m1,m2 = self.coeff[1]
@@ -184,30 +213,44 @@ class TpPendulum():
         g = self.g
         c, s = np.cos(theta1-theta2), np.sin(theta1-theta2)
         
-        theta1dot = z1
-        if theta1<np.pi/2:
-            z1dot = (f1/m2 - k*theta1dot  + m2*g*np.sin(theta2)*c - m2*s*(L1*z1**2*c + L2*z2**2) -
-                 (m1+m2)*g*np.sin(theta1)) / L1 / (m1 + m2*s**2)
+        if ballcatch:
+            theta1dot = 0
+            theta2dot = 0
+            z1dot = 0
+            z2dot = 0
         else:
-            z1dot = -k*theta1dot
-        theta2dot = z2
-        if theta2 < 0: 
-            z2dot = (f2/m2 - k*theta2dot + (m1+m2)*(L1*z1**2*s - g*np.sin(theta2) + g*np.sin(theta1)*c) + 
-                 m2*L2*z2**2*s*c) / L2 / (m1 + m2*s**2)
-        else:
-            z2dot = -k*theta2dot
-            
+            theta1dot = z1
+            if theta1<np.pi/2:
+                z1dot = (f1/m2 - k*theta1dot  + m2*g*np.sin(theta2)*c - m2*s*(L1*z1**2*c + L2*z2**2) -
+                     (m1+m2)*g*np.sin(theta1)) / L1 / (m1 + m2*s**2)
+            else:
+                z1dot = -k*theta1dot
+                
+            theta2dot = z2
+            if theta2 < 0: 
+                z2dot = (f2/m2 - k*theta2dot + (m1+m2)*(L1*z1**2*s - g*np.sin(theta2) + g*np.sin(theta1)*c) + 
+                     m2*L2*z2**2*s*c) / L2 / (m1 + m2*s**2)
+            else:
+                z2dot = -k*theta2dot        
+        
         return theta1dot,theta2dot,z1dot, z2dot
 
-    def solve(self,t,x0,y0):
+    def fbsolve(self,t,x0,y0,ballcatch):
         force = [self.controller2(x0,y0,i) for i in range(0,2)]
         f1 = force[0]
         f2 = force[1]
-        Xp = odeint(self.dALLdt, self.prev_cond, t, tcrit = t, args=(self,f1,f2))
+        Xp = odeint(self.dALLdt, self.prev_cond, t, tcrit = t, args=(self,f1,f2,ballcatch))
         self.prev_cond = Xp[-1,:]
         self.storeP.append(Xp[-1,:])
         self.storeT.append([f1,f2])
-        return Xp        
+        return Xp
+    
+    def ffsolve(self,t,vel,x0,y0,f1,f2,ballcatch):
+        Xp = odeint(self.dALLdt, self.prev_cond, t, tcrit = t, args=(self,f1,f2,ballcatch))
+        self.prev_cond = Xp[-1,:]
+        self.storeP.append(Xp[-1,:])
+        self.storeT.append([f1,f2])
+        return Xp
         
     def get_xy_coords(self):
         """Get (x, y) coordinates from generalized coordinates p"""
@@ -248,7 +291,7 @@ class TpPendulum():
         lim = max(self.coeff[0])*2
         fig, ax = plt.subplots(figsize=(6, 6))
         fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
-        ax.axis('off')
+        # ax.axis('off')
         ax.set(xlim=(-lim, lim), ylim=(-lim, lim))
     
         line, = ax.plot([], [], 'o-', lw=2)
@@ -293,6 +336,35 @@ class Muscle_Mech():
             plt.waitforbuttonpress()
         else:
             return 0
+        
+    def ff_iterator(self,Arm,Ball,maxiter,vel,x,y,f1adj,f2adj,ballcatch):
+        obstacle = [(0,0)]
+        f1 = Arm.musclegain+f1adj
+        f2 = Arm.musclegain+f2adj
+        for i in range(0,len(t_s)-1):
+            t = [t_s[i],t_s[i+1]]
+            dt = abs(t_s[i+1] - t_s[i])
+            vel,x,y,ballcatch = Ball.simple_ball(vel,x,y,dt,theta,obstacle)
+            Xp = Arm.ffsolve(t,vel,x,y,f1,f2,ballcatch)
+            obstacle = [(Arm.x,Arm.y)]
+        'end for'
+        tempB = np.stack(Ball.storeB)[:,1:]
+        tempP = np.stack(Arm.storeP)[:,0:2]
+        store = distance.cdist(tempB,tempP,'euclidean')
+        val = np.argwhere(store == np.min(store))[0]
+        time = Arm.t[val[0]]
+        xB,yB = tempB[val[0]]
+        xA,yA = tempP[val[0]] #need to convert to x,y coordinates!!!!!!!!!
+        diff = np.sqrt((xB-xA)**2+(yB-yA)**2)
+        signx = xA-xB
+        signy = yA-yB
+        if signx > 0 or signy > 0:
+            f1adj = -diff+f1adj
+            f2adj = -diff+f2adj
+        else:
+            f1adj = diff+f1adj
+            f2adj = diff+f1adj
+        return f1adj, f2adj, ballcatch
         
     def plot_torque_spring(self,spring):
         torque = np.stack(self.storeT)
@@ -349,8 +421,9 @@ if __name__ == "__main__":
     # linear algebra help: http://homepages.math.uic.edu/~jan/mcs320/mcs320notes/lec37.html
     ### PARAMS ###
     #Arm
+    plt.close('all')
     n = 2
-    pos1 = np.pi/4
+    pos1 = -np.pi/4
     pos2 = -np.pi/4
     vel = 0
     l1 = (13)*0.0254
@@ -360,41 +433,57 @@ if __name__ == "__main__":
     damp = 5
     #mech
     mgain = 100
+    forceint1 = mgain
+    forceint2 = mgain
+    maxiter = 20
+    ballcatch = False
     #ball
     e = 1 #coefficient of restitution
     mass = 2
     obstacle = []
-    vel = 3
-    y = 1
-    x = -1
+    vel = .5
+    y = .9
+    x = -.8
     theta = 0
     ### Time ###
-    Ttot = 5 # total time in second
+    Ttot = 10 # total time in second
     f_s = 500 # sample frequency (samples/s)
     t_s = np.arange(0,Ttot,1/f_s)
     t_ms = np.arange(0,Ttot*f_s,1)
     
     initial_cond_tpp = [[pos1,pos2],[vel,vel]]
     coeff_tpp = [[l1,l2],[m1,m2],damp]
-    initial_cond_ball = [10,0]
+    initial_cond_ball = [vel,x,y]
     
     ### INIT ###
-    Arm = TpPendulum(n,initial_cond_tpp,coeff_tpp,mgain,t_s,f_s)
+    Armobj = TpPendulum(n,initial_cond_tpp,coeff_tpp,mgain,t_s,f_s)
     mech = Muscle_Mech(mgain,f_s,t_s)
-    Ball = Ball(t_s,e,mass,initial_cond_ball)
+    Ballobj = Ball(t_s,e,mass,initial_cond_ball)
     
+    #### Feedforward ####    
+    f1adj = 0
+    f2adj = 0
+    count = 0
+    obstacle = [(0,0)]
+    while count < maxiter or not ballcatch:
+        Ballobj = Ball(t_s,e,mass,initial_cond_ball)
+        Armobj = TpPendulum(n,initial_cond_tpp,coeff_tpp,mgain,t_s,f_s)
+        f1adj,f2adj,ballcatch = mech.ff_iterator(Armobj, Ballobj, maxiter, vel, x, y,f1adj,f2adj, ballcatch)
+        count += 1
+    
+    #### Feedback ####
     for i in range(0,len(t_s)-1):
         t = [t_s[i],t_s[i+1]]
         dt = abs(t_s[i+1] - t_s[i])
-        vel,x,y = Ball.simple_ball(vel,x,y,dt,theta,obstacle)
-        Xp = Arm.solve(t,x,y)
-        obstacle = [(Arm.x,Arm.y)]
-        # Bp = ball.solve(t)
-    'end for'
-    X = np.stack(Arm.storeP)
-    T = np.stack(Arm.storeT)
-    B = np.stack(Ball.storeB)
-    Arm.plot_pendulum_trace()
-    Ball.plot_ball_trace()
-    anim = Arm.animate_pendulum()
+        
+        # vel,x,y,ballcatch = Ballobj.simple_ball(vel,x,y,dt,theta,obstacle)
+        # Xp = Armobj.fbsolve(t,x,y,ballcatch)
+        # obstacle = [(Armobj.x,Armobj.y)]
+        # Bp = Ballobj.solve(t)
+    # X = np.stack(Armobj.storeP)
+    # T = np.stack(Armobj.storeT)
+    # B = np.stack(Ball.storeB)
+    Armobj.plot_pendulum_trace()
+    Ballobj.plot_ball_trace()
+    anim = Armobj.animate_pendulum()
         
