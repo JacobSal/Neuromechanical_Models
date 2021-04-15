@@ -76,8 +76,8 @@ class Ball():
         vel = vel0*airres
         x = vel*dt+x0
         y = -9.81*dt*dt+y0
-        close = np.array([(x0-x,y0-y) for x,y in obstacle])
-        if np.any(abs(close)<0.01) or y0<=0: #pretty close so lets just stick the ball to the obstacle (perfect catch)
+        close = np.sqrt((x0-obstacle[0])**2+(y0-obstacle[1])**2)
+        if np.any(abs(close)<0.01): #pretty close so lets just stick the ball to the obstacle (perfect catch)
             vel = 0
             x,y = x0,y0
             ballcatch = True
@@ -233,7 +233,7 @@ class TpPendulum(object):
             else:
                 z2dot = -k*theta2dot        
         
-        return theta1dot,theta2dot,z1dot, z2dot
+        return theta1dot,theta2dot,z1dot,z2dot
 
     def fbsolve(self,t,x0,y0,ballcatch):
         force = [self.controller2(x0,y0,i) for i in range(0,2)]
@@ -309,6 +309,35 @@ class TpPendulum(object):
                                        blit=True, init_func=init)
         # plt.close(fig)
         return anim
+    
+    def animate_ball_pendulum(self,ballxy):
+        x, y = self.get_xy_coords()
+        x0,y0 = ballxy[0,:]
+        lim = max(self.coeff[0])*2
+        fig, ax = plt.subplots(figsize=(6, 6))
+        fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+        # ax.axis('off')
+        ax.set(xlim=(-lim, lim), ylim=(-lim, lim))    
+        line, = ax.plot([], [], 'o-', lw=2)
+        ball = plt.Circle((x0,y0), 0.08)
+        ax.add_patch(ball)
+    
+        def init():
+            line.set_data([], [])
+            ball.set_center((x0,y0))            
+            return line, ball,
+    
+        def animate(i,Bpos):
+            xB,yB = Bpos[:,0],Bpos[:,1]
+            line.set_data(x[i], y[i])
+            ball.set_center((xB[i],yB[i]))
+            return line, ball,
+    
+        anim = animation.FuncAnimation(fig, animate, frames=len(self.t),
+                                       interval=self.f_s * self.t.max() / len(self.t),
+                                       blit=True, init_func=init)
+        # plt.close(fig)
+        return anim
 
 #%%       
 class Muscle_Mech():
@@ -344,17 +373,19 @@ class Muscle_Mech():
         for i in range(0,len(t_s)-1):
             t = [t_s[i],t_s[i+1]]
             dt = abs(t_s[i+1] - t_s[i])
-            vel,x,y,ballcatch = Ball.simple_ball(vel,x,y,dt,theta,obstacle)
-            Xp = Arm.ffsolve(t,vel,x,y,f1,f2,ballcatch)
-            obstacle = [(Arm.x,Arm.y)]
+            vel,x,y,ballcatch = Ball.simple_ball(vel,x,y,dt,theta,obstacle) #run ball dynamics
+            Xp = Arm.ffsolve(t,vel,x,y,f1,f2,ballcatch) #use pendulum differential equation to judge movement
+            obstacle = (Arm.x,Arm.y) #produce obstacle from the peripheral end of pendulum
         'end for'
+        print(ballcatch)
         tempB = np.stack(Ball.storeB)[:,1:]
-        tempP = np.stack(Arm.storeP)[:,0:2]
+        point1,point2 = Arm.get_xy_coords()
+        tempP = point2[:,1:]
         store = distance.cdist(tempB,tempP,'euclidean')
         val = np.argwhere(store == np.min(store))[0]
         time = Arm.t[val[0]]
         xB,yB = tempB[val[0]]
-        xA,yA = tempP[val[0]] #need to convert to x,y coordinates!!!!!!!!!
+        xA,yA = tempP[val[0]]
         diff = np.sqrt((xB-xA)**2+(yB-yA)**2)
         signx = xA-xB
         signy = yA-yB
@@ -432,7 +463,7 @@ if __name__ == "__main__":
     m2 = 5.715264/3
     damp = 5
     #mech
-    mgain = 100
+    mgain = 10
     forceint1 = mgain
     forceint2 = mgain
     maxiter = 20
@@ -440,7 +471,7 @@ if __name__ == "__main__":
     #ball
     e = 1 #coefficient of restitution
     mass = 2
-    obstacle = []
+    obstacle = (0,0)
     vel = .5
     y = .9
     x = -.8
@@ -461,29 +492,29 @@ if __name__ == "__main__":
     Ballobj = Ball(t_s,e,mass,initial_cond_ball)
     
     #### Feedforward ####    
-    f1adj = 0
-    f2adj = 0
-    count = 0
-    obstacle = [(0,0)]
-    while count < maxiter or not ballcatch:
-        Ballobj = Ball(t_s,e,mass,initial_cond_ball)
-        Armobj = TpPendulum(n,initial_cond_tpp,coeff_tpp,mgain,t_s,f_s)
-        f1adj,f2adj,ballcatch = mech.ff_iterator(Armobj, Ballobj, maxiter, vel, x, y,f1adj,f2adj, ballcatch)
-        count += 1
+    # f1adj = 0
+    # f2adj = 0
+    # count = 0
+    # obstacle = [(0,0)]
+    # while count < maxiter and not ballcatch:
+    #     Ballobj = Ball(t_s,e,mass,initial_cond_ball)
+    #     Armobj = TpPendulum(n,initial_cond_tpp,coeff_tpp,mgain,t_s,f_s)
+    #     f1adj,f2adj,ballcatch = mech.ff_iterator(Armobj, Ballobj, maxiter, vel, x, y,f1adj,f2adj, ballcatch)
+    #     count += 1
     
     #### Feedback ####
     for i in range(0,len(t_s)-1):
         t = [t_s[i],t_s[i+1]]
-        dt = abs(t_s[i+1] - t_s[i])
-        
-        # vel,x,y,ballcatch = Ballobj.simple_ball(vel,x,y,dt,theta,obstacle)
-        # Xp = Armobj.fbsolve(t,x,y,ballcatch)
-        # obstacle = [(Armobj.x,Armobj.y)]
+        dt = abs(t_s[i+1] - t_s[i])        
+        vel,x,y,ballcatch = Ballobj.simple_ball(vel,x,y,dt,theta,obstacle)
+        Xp = Armobj.fbsolve(t,x,y,ballcatch)
+        obstacle = (Armobj.x,Armobj.y)
         # Bp = Ballobj.solve(t)
-    # X = np.stack(Armobj.storeP)
-    # T = np.stack(Armobj.storeT)
-    # B = np.stack(Ball.storeB)
+    X = np.stack(Armobj.storeP)
+    T = np.stack(Armobj.storeT)
+    B = np.stack(Ballobj.storeB)
     Armobj.plot_pendulum_trace()
     Ballobj.plot_ball_trace()
-    anim = Armobj.animate_pendulum()
+    # anim = Armobj.animate_pendulum()
+    anim = Armobj.animate_ball_pendulum(B[:,1:])
         
