@@ -58,7 +58,7 @@ class Ball():
     def calc_force(self,vel,dt):
         return vel/dt*self.m
     
-    def simple_ball(self,vx,vy,x0,y0,dt,theta,obstacle):
+    def simple_ball(self,vx,vy,x0,y0,dt,obstacle):
         """
         vel0: Type int
             initial velocity in the horizontal plane
@@ -405,7 +405,7 @@ class Muscle_Mech():
         for i in range(0,len(t_s)-1):
             t = [t_s[i],t_s[i+1]]
             dt = abs(t_s[i+1] - t_s[i])
-            vx,vy,x,y,ballcatch = Ball.simple_ball(vx,vy,x,y,dt,theta,obstacle) #run ball dynamics
+            vx,vy,x,y,ballcatch = Ball.simple_ball(vx,vy,x,y,dt,obstacle) #run ball dynamics
             Xp = Arm.ffsolve(t,vx,vy,x,y,f1,f2,ballcatch) #use pendulum differential equation to judge movement
             xA,yA = Armobj.get_xy()
             obstacle = (xA[0,2],yA[0,2]) #produce obstacle from the peripheral end of pendulum
@@ -415,28 +415,63 @@ class Muscle_Mech():
         point1,point2 = Arm.get_xy_coords()
         tempP2 = point2[:,1:]
         tempP1 = point1[:,1:]
-        store1 = distance.cdist(tempB,tempP1,'euclidean')
-        store2 = distance.cdist(tempB,tempP2,'euclidean')
-        val1 = np.argwhere(store1 == np.min(store1))[0]
-        val2 = np.argwhere(store2 == np.min(store2))[0]
+        # store1 = distance.cdist(tempB,tempP1,'euclidean')
+        # store2 = distance.cdist(tempB,tempP2,'euclidean')
+        # val1 = np.argwhere(store1 == np.min(store1))[0]
+        # val2 = np.argwhere(store2 == np.min(store2))[0]
         # time = Arm.t[val[0]]
-        xB1,yB1 = tempB[val1[0]]
-        xB2,yB2 = tempB[val2[0]]
-        xA1,yA1 = tempP1[val1[0]]
-        xA2,yA2 = tempP2[val2[0]]
+        # xB1,yB1 = tempB[val1[0]]
+        # xB2,yB2 = tempB[val2[0]]
+        # xA1,yA1 = tempP1[val1[0]]
+        # xA2,yA2 = tempP2[val2[0]]
+        # thA1 = Arm.get_theta(xA1,yA1)
+        # thA2 = Arm.get_theta(xA2,yA2)
+        # thB1 = Arm.get_theta(xB1,yB1)
+        # thB2 = Arm.get_theta(xB2,yB2)
+        
+        # adj = 2
+        # diff = thB1-thA1
+        # if diff > 0:
+        #     f1adj = f1adj - adj
+        # else:
+        #     f1adj = f1adj + adj
+        # dist1 = diff*np.sqrt((xB1-xA1)**2+(yB1-yA1)**2)
+        
+        # diff = thB2-thA2
+        # if diff > 0:
+        #     f2adj = f2adj - adj
+        # else:
+        #     f2adj = f2adj + adj
+        # dist2 = diff*np.sqrt((xB2-xA2)**2+(yB2-yA2)**2)
+        
+        # f1adj = dist1+f1adj
+        # f2adj = dist2+f2adj
+        
+        l1,l2 = Arm.coeff[0]
+        armrad = l1+l2
+        theta = np.arange(0,2*np.pi,2*np.pi/len(tempB))
+        armRadii = [(armrad*np.cos(thetai),armrad*np.sin(thetai)) for thetai in theta]
+        store = distance.cdist(tempB,armRadii,'euclidean')
+        val = np.argwhere(store == np.min(store))[0]
+        desth = theta[val[0]]
+        xA1,yA1 = tempP1[val[1]]
+        xA2,yA2 = tempP2[val[1]]
         thA1 = Arm.get_theta(xA1,yA1)
         thA2 = Arm.get_theta(xA2,yA2)
-        thB1 = Arm.get_theta(xB1,yB1)
-        thB2 = Arm.get_theta(xB2,yB2)
+        print(val)
         
-        diff = thB1-thA1
-        dist1 = diff*np.sqrt((xB1-xA1)**2+(yB1-yA1)**2)
+        adj = 5
+        diff = desth-thA1
+        if diff > 0:
+            f1adj = f1adj - adj
+        else:
+            f1adj = f1adj + adj
         
-        diff = thB2-thA2
-        dist2 = diff*np.sqrt((xB2-xA2)**2+(yB2-yA2)**2)
-        
-        f1adj = dist1+f1adj
-        f2adj = dist2+f2adj
+        diff = desth-thA2
+        if diff > 0:
+            f2adj = f2adj - adj
+        else:
+            f2adj = f2adj + adj
         return f1adj, f2adj, ballcatch
         
     def plot_torque_spring(self,spring):
@@ -496,8 +531,8 @@ if __name__ == "__main__":
     #Arm
     plt.close('all')
     n = 2
-    pos1 = -np.pi/4
-    pos2 = np.pi/4
+    pos1 = -np.pi/4*2
+    pos2 = -np.pi/4
     vel = 0
     l1 = (13)*0.0254
     l2 = (12+9)*0.0254
@@ -505,10 +540,10 @@ if __name__ == "__main__":
     m2 = 5.715264/3
     damp = 10
     #mech
-    mgain = 100
+    mgain = 200
     forceint1 = mgain
     forceint2 = mgain
-    maxiter = 20
+    maxiter = 40
     ballcatch = False
     #ball
     e = 1 #coefficient of restitution
@@ -550,7 +585,7 @@ if __name__ == "__main__":
     # for i in range(0,len(t_s)-1):
     #     t = [t_s[i],t_s[i+1]]
     #     dt = abs(t_s[i+1] - t_s[i])        
-    #     vx,vy,x,y,ballcatch = Ballobj.simple_ball(vx,vy,x,y,dt,theta,obstacle)
+    #     vx,vy,x,y,ballcatch = Ballobj.simple_ball(vx,vy,x,y,dt,obstacle)
     #     Xp = Armobj.fbsolve(t,x,y,ballcatch)
     #     xA,yA = Armobj.get_xy()
     #     obstacle = (xA[0,2],yA[0,2])
