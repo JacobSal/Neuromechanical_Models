@@ -311,6 +311,16 @@ class TpPendulum(object):
         plt.savefig(os.path.join(save_bin,'xy_trace.png'),dpi=200,bbox_inches='tight')
         return 0
     
+    def get_work(self,work,counter):
+        n = len(self.storeP[counter]) // 2
+        if counter > 1:
+            dtheta = abs(self.storeP[counter][:n] - self.storeP[counter-1][:n])
+            dTor = abs(np.array(self.storeT[counter]) - np.array(self.storeT[counter-1]))
+            work = work + dTor/dtheta
+        else:
+            work = work
+        return work
+    
     def set_new_tpp(self,Xp,n_p):
         n = Xp.shape[1] // 2
         n_p_new = n_p.copy()
